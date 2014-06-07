@@ -53,7 +53,7 @@ func cmdMatch(rows []*Row, args []string) error {
 	var csvWriter *csv.Writer
 	if len(args) >= 1 && args[0] == "csv" {
 		csvWriter = csv.NewWriter(os.Stdout)
-		csvWriter.Write(rows[0].Columns())
+		csvWriter.Write(append([]string{"Nr"}, rows[0].Columns()...))
 	}
 
 	groups := []string{"CIS", "RRMS", "SPMS", "PPMS"}
@@ -84,8 +84,8 @@ func cmdMatch(rows []*Row, args []string) error {
 				bestMatch.Control.Set("Gruppe", bestMatch.Control.Get("Gruppe")+"-"+group)
 				matchedRows = append(matchedRows, bestMatch.Case, bestMatch.Control)
 				if csvWriter != nil {
-					csvWriter.Write(bestMatch.Case.values)
-					csvWriter.Write(bestMatch.Control.values)
+					csvWriter.Write(append([]string{fmt.Sprintf("%d", bestMatch.Case.Num())}, bestMatch.Case.values...))
+					csvWriter.Write(append([]string{fmt.Sprintf("%d", bestMatch.Control.Num())}, bestMatch.Control.values...))
 				}
 				controlRows = append(controlRows[:bestMatch.ControlIndex], controlRows[bestMatch.ControlIndex+1:]...)
 				caseRows = append(caseRows[:bestMatch.CaseIndex], caseRows[bestMatch.CaseIndex+1:]...)
