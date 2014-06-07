@@ -53,6 +53,7 @@ func cmdMatch(rows []*Row, args []string) error {
 	var csvWriter *csv.Writer
 	if len(args) >= 1 && args[0] == "csv" {
 		csvWriter = csv.NewWriter(os.Stdout)
+		defer csvWriter.Flush()
 		csvWriter.Write(append([]string{"Nr"}, rows[0].Columns()...))
 	}
 
