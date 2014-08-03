@@ -1,263 +1,251 @@
 package main
 
 import (
-	"bufio"
 	"encoding/csv"
+	"flag"
 	"fmt"
-	"github.com/speedata/goxlsx"
 	"io"
-	"math"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
-	"unicode/utf8"
+	"time"
 )
 
 func main() {
-	args := os.Args[1:]
-	if len(args) < 1 {
-		panic("Missing file name argument.")
+	flag.Usage = func() {
+		fatalf("./main <input.csv> <outputDir>")
 	}
-	rows, err := loadRows(args[0])
+	flag.Parse()
+	inputFile := flag.Arg(0)
+	if inputFile == "" {
+		flag.Usage()
+	}
+	outputDir := flag.Arg(1)
+	if outputDir == "" {
+		flag.Usage()
+	} else if outputDir == "." {
+		fmt.Printf("Output dir must not be working directory")
+	}
+	if err := os.RemoveAll(outputDir); err != nil {
+		fatalf("Could not delete outputDir: %s", err)
+	}
+	if err := os.MkdirAll(outputDir, 0777); err != nil {
+		fatalf("Could not create outputDir: %s", err)
+	}
+	start := time.Now()
+	subjects, err := readSubjects(inputFile)
 	if err != nil {
-		panic(err)
+		fatalf("readSubjects: %s", err)
 	}
-
-	if len(args) < 2 {
-		panic("Missing command argument.")
+	fmt.Printf("readSubjects: %s\n", time.Since(start))
+	outputFiles := map[string]func(w *csv.Writer) error{
+		"IgG-MS-GK-Unmatched.csv": func(w *csv.Writer) error {
+			if err := w.Write([]string{"Title", "GK", "MS"}); err != nil {
+				return err
+			}
+			positive := map[string]int{}
+			negative := map[string]int{}
+			for _, s := range subjects {
+				group := "GK"
+				if s.Group != GK {
+					group = "MS"
+				}
+				if s.IgG {
+					positive[group]++
+				} else {
+					negative[group]++
+				}
+			}
+			if err := w.Write([]string{"positiv", fmt.Sprintf("%d", positive["GK"]), fmt.Sprintf("%d", positive["MS"])}); err != nil {
+				return err
+			}
+			if err := w.Write([]string{"negativ", fmt.Sprintf("%d", negative["GK"]), fmt.Sprintf("%d", negative["MS"])}); err != nil {
+				return err
+			}
+			return nil
+		},
 	}
-	cmd := args[1]
-	switch cmd {
-	case "match":
-		err = cmdMatch(rows, args[2:])
-	}
-	if err != nil {
-		panic(err)
+	for name, fn := range outputFiles {
+		start := time.Now()
+		outPath := filepath.Join(outputDir, name)
+		outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
+		if err != nil {
+			fatalf("Could not open output file: %s", err)
+		}
+		defer outFile.Close()
+		w := csv.NewWriter(outFile)
+		w.Comma = '\t'
+		if err := fn(w); err != nil {
+			fmt.Printf("Failed to write %s: %s\n", name, err)
+		}
+		w.Flush()
+		fmt.Printf("%s: %s\n", name, time.Since(start))
 	}
 }
 
-func cmdMatch(rows []*Row, args []string) error {
-	groupedRows := map[string]map[string][]*Row{}
-	for _, row := range rows {
-		group := row.Get("Gruppe")
-		if group == "" {
+func readSubjects(file string) ([]*Subject, error) {
+	iconv := exec.Command("iconv", "-f", "utf-16", "-t", "utf-8", file)
+	stdout, err := iconv.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err := iconv.Start(); err != nil {
+		return nil, err
+	}
+	defer func() {
+		stdout.Close()
+		iconv.Wait()
+	}()
+	r := csv.NewReader(stdout)
+	r.Comma = '\t'
+	columns, err := r.Read()
+	if err != nil {
+		return nil, err
+	}
+	subjects := []*Subject{}
+	for {
+		row, err := r.Read()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return nil, err
+		}
+		get := func(column string) (string, error) {
+			for i, c := range columns {
+				if column == c {
+					return row[i], nil
+				}
+			}
+			return "", fmt.Errorf("Unknown column: %s", column)
+		}
+		badRow, err := get("nicht verwendbar")
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(badRow) != "" {
 			continue
 		}
-		gender := row.Get("Geschlecht")
-		if _, ok := groupedRows[group]; !ok {
-			groupedRows[group] = map[string][]*Row{}
-		}
-		groupedRows[group][gender] = append(groupedRows[group][gender], row)
-	}
-
-	var csvWriter *csv.Writer
-	if len(args) >= 1 && args[0] == "csv" {
-		csvWriter = csv.NewWriter(os.Stdout)
-		defer csvWriter.Flush()
-		csvWriter.Write(append([]string{"Nr"}, rows[0].Columns()...))
-	}
-
-	groups := []string{"CIS", "RRMS", "SPMS", "PPMS"}
-	for _, group := range groups {
-		if csvWriter == nil {
-			fmt.Printf("===== %s =====\n", group)
-		}
-		matchedRows := []*Row{}
-		for gender, caseRows := range groupedRows[group] {
-			controlRows := make([]*Row, len(groupedRows["GK"][gender]))
-			copy(controlRows, groupedRows["GK"][gender])
-			for len(controlRows) > 0 && len(caseRows) > 0 {
-				var bestMatch *Match
-				for caseIndex, caseRow := range caseRows {
-					for controlIndex, controlRow := range controlRows {
-						currentMatch := &Match{
-							Case:         caseRow,
-							CaseIndex:    caseIndex,
-							Control:      controlRow,
-							ControlIndex: controlIndex,
-						}
-						if bestMatch == nil || bestMatch.AgeDiff() > currentMatch.AgeDiff() {
-							bestMatch = currentMatch
+		s := &Subject{}
+		apply := func(mapping map[string]interface{}) error {
+			for column, dst := range mapping {
+				val, err := get(column)
+				if err != nil {
+					return err
+				}
+				val = strings.TrimSpace(val)
+				switch t := dst.(type) {
+				case *string:
+					*t = val
+				case *bool:
+					switch val {
+					case "positiv":
+						*t = true
+					case "negativ":
+						*t = false
+					default:
+						return fmt.Errorf("Invalid bool: %s", val)
+					}
+				case *Group:
+					found := false
+					for _, group := range Groups {
+						if string(group) == val {
+							*t = Group(val)
+							found = true
+							break
 						}
 					}
+					if !found {
+						return fmt.Errorf("Invalid Group: %s", val)
+					}
+				case *Gender:
+					found := false
+					for _, gender := range Genders {
+						if string(gender) == val {
+							*t = Gender(val)
+							found = true
+							break
+						}
+					}
+					if !found {
+						return fmt.Errorf("Invalid Gender: %s", val)
+					}
+				case *float64:
+					val = strings.Replace(val, ",", ".", -1)
+					f, err := strconv.ParseFloat(val, 64)
+					if err != nil {
+						return err
+					}
+					*t = f
+				default:
+					return fmt.Errorf("Bad dst type: %#v", dst)
 				}
-				bestMatch.Control = bestMatch.Control.Copy()
-				bestMatch.Control.Set("Gruppe", bestMatch.Control.Get("Gruppe")+"-"+group)
-				matchedRows = append(matchedRows, bestMatch.Case, bestMatch.Control)
-				if csvWriter != nil {
-					csvWriter.Write(append([]string{fmt.Sprintf("%d", bestMatch.Case.Num())}, bestMatch.Case.values...))
-					csvWriter.Write(append([]string{fmt.Sprintf("%d", bestMatch.Control.Num())}, bestMatch.Control.values...))
-				}
-				controlRows = append(controlRows[:bestMatch.ControlIndex], controlRows[bestMatch.ControlIndex+1:]...)
-				caseRows = append(caseRows[:bestMatch.CaseIndex], caseRows[bestMatch.CaseIndex+1:]...)
 			}
+			return nil
 		}
-		if csvWriter == nil {
-			mustPrintRows(matchedRows)
-			fmt.Printf("\n\n")
+		initialMapping := map[string]interface{}{
+			"Probennummer": &s.ProbeNumber,
+			"Vorname":      &s.FirstName,
+			"Nachname":     &s.LastName,
 		}
-	}
-	return nil
-}
-
-type Match struct {
-	Case         *Row
-	CaseIndex    int
-	Control      *Row
-	ControlIndex int
-}
-
-func (m *Match) AgeDiff() float64 {
-	return math.Abs(m.Case.Age() - m.Control.Age())
-}
-
-type MatchGroup struct {
-	Group  string
-	Gender string
-}
-
-func loadRows(file string) ([]*Row, error) {
-	doc, err := goxlsx.OpenFile(file)
-	if err != nil {
-		return nil, err
-	}
-	sheet, err := doc.GetWorksheet(0)
-	if err != nil {
-		return nil, err
-	}
-
-	rows := []*Row{}
-	columns := []string{}
-	for r := sheet.MinRow; r < sheet.MaxRow; r++ {
-		var row *Row
-		if r > sheet.MinRow {
-			row = &Row{num: r, columns: columns}
+		if err := apply(initialMapping); err != nil {
+			return nil, fmt.Errorf("%s: %s", err, row)
 		}
-		for c := sheet.MinColumn; c < sheet.MaxColumn; c++ {
-			val := strings.TrimSpace(sheet.Cell(c, r))
-			if r == sheet.MinRow {
-				columns = append(columns, val)
-			} else {
-				row.values = append(row.values, val)
-			}
+		if s.ProbeNumber == "" {
+			// ignore empty row
+			continue
 		}
-		if r > sheet.MinRow {
-			rows = append(rows, row)
+		remainingMapping := map[string]interface{}{
+			"Alter (PE)": &s.Age,
+			"Gruppe":     &s.Group,
+			"Geschlecht": &s.Gender,
+			"IgG":        &s.IgG,
 		}
-	}
-	return rows, nil
-}
-
-type Row struct {
-	columns []string
-	values  []string
-	num     int
-}
-
-func (r *Row) Copy() *Row {
-	c := *r
-	c.values = make([]string, len(r.values))
-	copy(c.values, r.values)
-	return &c
-}
-
-func (r *Row) Age() float64 {
-	ageStr := r.Get("Alter")
-	ageFloat, err := strconv.ParseFloat(ageStr, 64)
-	if err != nil {
-		panic(err)
-	}
-	return ageFloat
-}
-
-func (r *Row) Num() int {
-	return r.num
-}
-
-func (r *Row) Columns() []string {
-	return r.columns
-}
-
-func (r *Row) Get(column string) string {
-	return r.values[r.index(column)]
-}
-
-func (r *Row) Set(column string, val string) {
-	r.values[r.index(column)] = val
-}
-
-func (r *Row) index(column string) int {
-	for i, val := range r.columns {
-		if column == val {
-			return i
+		if err := apply(remainingMapping); err != nil {
+			return nil, fmt.Errorf("%s: %s", s, err)
 		}
+		subjects = append(subjects, s)
 	}
-	panic(fmt.Sprintf("Unknown column: %s", column))
+	return subjects, nil
 }
 
+type Gender string
 
-func writeTable(w io.Writer, data [][]string) (err error) {
-	lengths := make([]int, len(data[0]))
-	for _, row := range data {
-		for i, val := range row {
-			if l := len(val); l > lengths[i] {
-				lengths[i] = l
-			}
-		}
-	}
-	bw := bufio.NewWriter(w)
-	defer func() {
-		if err == nil {
-			err = bw.Flush()
-		} else {
-			bw.Flush()
-		}
-	}()
-	for _, row := range data {
-		for i, val := range row {
-			last := i+1 == len(row)
-			if pad := lengths[i] - utf8.RuneCountInString(val); pad > 0 && !last {
-				val += strings.Repeat(" ", pad)
-			}
-			_, err = io.WriteString(bw, val)
-			if err != nil {
-				return
-			}
-			if last {
-				_, err = io.WriteString(bw, "\n")
-			} else {
-				_, err = io.WriteString(bw, " ")
-			}
-			if err != nil {
-				return
-			}
-		}
-	}
-	return
+const (
+	Male   Gender = "m"
+	Female Gender = "w"
+)
+
+var Genders = []Gender{Male, Female}
+
+type Group string
+
+const (
+	GK   Group = "GK"
+	CIS  Group = "CIS"
+	RRMS Group = "RRMS"
+	SPMS Group = "SPMS"
+	PPMS Group = "PPMS"
+)
+
+var Groups = []Group{GK, CIS, RRMS, SPMS, PPMS}
+
+type Subject struct {
+	ProbeNumber string
+	FirstName   string
+	LastName    string
+	Group       Group
+	Gender      Gender
+	IgG         bool
+	Age         float64
 }
 
-func mustPrintfStdout(format string, args ...interface{}) {
-	if _, err := fmt.Fprintf(os.Stdout, format, args...); err != nil {
-		panic(err)
-	}
+func (s *Subject) String() string {
+	return fmt.Sprintf("<%s,%s,%s>", s.FirstName, s.LastName, s.ProbeNumber)
 }
 
-func mustPrintTable(data [][]string) {
-	if err := writeTable(os.Stdout, data); err != nil {
-		panic(err)
-	}
-}
-
-func mustPrintRows(rows []*Row) {
-	data := [][]string{}
-	data = append(data, append([]string{"1"}, rows[0].Columns()...))
-	for _, row := range rows {
-		rowVals := []string{fmt.Sprintf("%d", row.Num())}
-		for _, column := range row.Columns() {
-			val := row.Get(column)
-			rowVals = append(rowVals, val)
-		}
-		data = append(data, rowVals)
-	}
-	mustPrintTable(data)
+func fatalf(msg string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, msg+"\n", args...)
+	os.Exit(1)
 }
