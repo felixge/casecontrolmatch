@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 )
 
 func main() {
+	start := time.Now()
 	flag.Usage = func() {
 		fatalf("./main <input.csv> <outputDir>")
 	}
@@ -28,61 +30,220 @@ func main() {
 	} else if outputDir == "." {
 		fmt.Printf("Output dir must not be working directory")
 	}
-	if err := os.RemoveAll(outputDir); err != nil {
-		fatalf("Could not delete outputDir: %s", err)
-	}
-	if err := os.MkdirAll(outputDir, 0777); err != nil {
-		fatalf("Could not create outputDir: %s", err)
-	}
-	start := time.Now()
+	readStart := time.Now()
 	subjects, err := readSubjects(inputFile)
 	if err != nil {
 		fatalf("readSubjects: %s", err)
 	}
-	fmt.Printf("readSubjects: %s\n", time.Since(start))
+	fmt.Printf("readSubjects: %s\n", time.Since(readStart))
+	matchStart := time.Now()
+	matched, matchedAgeDiffs := match(subjects)
+	fmt.Printf("match: %s\n", time.Since(matchStart))
+	IgG_MS_GK := func(w *csv.Writer, subjects []*Subject) error {
+		if err := w.Write([]string{"Title", "GK", "MS"}); err != nil {
+			return err
+		}
+		positive := map[string]int{}
+		negative := map[string]int{}
+		for _, s := range subjects {
+			group := "GK"
+			if s.Group != GK {
+				group = "MS"
+			}
+			if s.IgG {
+				positive[group]++
+			} else {
+				negative[group]++
+			}
+		}
+		if err := w.Write([]string{"positiv", fmt.Sprintf("%d", positive["GK"]), fmt.Sprintf("%d", positive["MS"])}); err != nil {
+			return err
+		}
+		if err := w.Write([]string{"negativ", fmt.Sprintf("%d", negative["GK"]), fmt.Sprintf("%d", negative["MS"])}); err != nil {
+			return err
+		}
+		return nil
+	}
 	outputFiles := map[string]func(w *csv.Writer) error{
-		"IgG-MS-GK-Unmatched.csv": func(w *csv.Writer) error {
-			if err := w.Write([]string{"Title", "GK", "MS"}); err != nil {
-				return err
-			}
-			positive := map[string]int{}
-			negative := map[string]int{}
-			for _, s := range subjects {
-				group := "GK"
-				if s.Group != GK {
-					group = "MS"
-				}
-				if s.IgG {
-					positive[group]++
-				} else {
-					negative[group]++
-				}
-			}
-			if err := w.Write([]string{"positiv", fmt.Sprintf("%d", positive["GK"]), fmt.Sprintf("%d", positive["MS"])}); err != nil {
-				return err
-			}
-			if err := w.Write([]string{"negativ", fmt.Sprintf("%d", negative["GK"]), fmt.Sprintf("%d", negative["MS"])}); err != nil {
-				return err
-			}
-			return nil
+		"Patienten": func(w *csv.Writer) error {
+			return writeSubjects(w, subjects)
+		},
+		"Patienten-Matched": func(w *csv.Writer) error {
+			return writeSubjects(w, matched)
+		},
+		"Patienten-Matched-Altersunterschied": func(w *csv.Writer) error {
+			return writeHistogram(w, matchedAgeDiffs)
+		},
+		"IgG-MS-GK-Unmatched": func(w *csv.Writer) error {
+			return IgG_MS_GK(w, subjects)
+		},
+		"IgG-MS-GK-Matched": func(w *csv.Writer) error {
+			return IgG_MS_GK(w, matched)
 		},
 	}
 	for name, fn := range outputFiles {
-		start := time.Now()
-		outPath := filepath.Join(outputDir, name)
-		outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
-		if err != nil {
-			fatalf("Could not open output file: %s", err)
+		outputs := []string{"csv", "prism"}
+		for i, output := range outputs {
+			start := time.Now()
+			fileName := name + ".csv"
+			outPath := filepath.Join(outputDir, output, fileName)
+			if err := os.MkdirAll(filepath.Dir(outPath), 0777); err != nil {
+				fatalf("Could not create outPath: %s", err)
+			}
+			outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0666)
+			if err != nil {
+				fatalf("Could not open output file: %s", err)
+			}
+			defer outFile.Close()
+			w := csv.NewWriter(outFile)
+			if output == "prism" {
+				w.Comma = '\t'
+			}
+			if err := fn(w); err != nil {
+				fmt.Printf("Failed to write %s: %s\n", outPath, err)
+			}
+			w.Flush()
+			if i == 0 {
+				fmt.Printf("%s: %s\n", name, time.Since(start))
+			}
 		}
-		defer outFile.Close()
-		w := csv.NewWriter(outFile)
-		w.Comma = '\t'
-		if err := fn(w); err != nil {
-			fmt.Printf("Failed to write %s: %s\n", name, err)
-		}
-		w.Flush()
-		fmt.Printf("%s: %s\n", name, time.Since(start))
 	}
+	fmt.Printf("Total: %s\n", time.Since(start))
+}
+
+func writeHistogram(w *csv.Writer, h Histogram) error {
+	header := []string{
+		"Min",
+		"Max",
+		"Median",
+		"Mittel",
+	}
+	if err := w.Write(header); err != nil {
+		return err
+	}
+	row := []string{
+		fmt.Sprintf("%f", h.Min()),
+		fmt.Sprintf("%f", h.Max()),
+		fmt.Sprintf("%f", h.Median()),
+		fmt.Sprintf("%f", h.Mean()),
+	}
+	return w.Write(row)
+}
+
+func writeSubjects(w *csv.Writer, subjects []*Subject) error {
+	header := []string{
+		"Labor- Berlin Nr.",
+		"Probennummer",
+		"Vorname",
+		"Nachname",
+		"Geschlecht",
+		"Gruppe",
+		"IgG",
+		"Alter (Entname)",
+	}
+	if err := w.Write(header); err != nil {
+		return err
+	}
+	for _, s := range subjects {
+		row := []string{
+			s.LabBerlinNumber,
+			s.ProbeNumber,
+			s.FirstName,
+			s.LastName,
+			string(s.Gender),
+			string(s.Group),
+			fmt.Sprintf("%s", s.IgG),
+			fmt.Sprintf("%f", s.Age),
+		}
+		if err := w.Write(row); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func match(subjects []*Subject) (results []*Subject, ageDiffs Histogram) {
+	var (
+		ops      = 0
+		controls []*Subject
+		cases    []*Subject
+	)
+	for _, subject := range subjects {
+		ops++
+		if subject.Group == GK {
+			controls = append(controls, subject)
+		} else {
+			cases = append(cases, subject)
+		}
+	}
+	for _, controlSubject := range controls {
+		bestMatch := -1
+		for i, caseSubject := range cases {
+			ops++
+			if caseSubject.Gender != controlSubject.Gender {
+				continue
+			}
+			if bestMatch == -1 {
+				bestMatch = i
+				continue
+			}
+			currentAgeDiff := math.Abs(caseSubject.Age - controlSubject.Age)
+			bestAgeDiff := math.Abs(cases[bestMatch].Age - controlSubject.Age)
+			if currentAgeDiff < bestAgeDiff {
+				bestMatch = i
+			}
+		}
+		ageDiff := math.Abs(cases[bestMatch].Age - controlSubject.Age)
+		ageDiffs = append(ageDiffs, ageDiff)
+		if bestMatch > -1 {
+			results = append(results, controlSubject, cases[bestMatch])
+			cases = append(cases[0:bestMatch], cases[bestMatch+1:]...)
+		}
+	}
+	return
+}
+
+type Histogram []float64
+
+func (h Histogram) Min() float64 {
+	var min float64
+	for _, val := range h {
+		min = math.Min(min, val)
+	}
+	return min
+}
+
+func (h Histogram) Max() float64 {
+	var max float64
+	for _, val := range h {
+		max = math.Max(max, val)
+	}
+	return max
+}
+
+func (h Histogram) Mean() float64 {
+	var sum float64
+	for _, val := range h {
+		sum += val
+	}
+	return sum / float64(len(h))
+}
+
+func (h Histogram) Median() float64 {
+	if len(h)%2 == 0 {
+		return (h[len(h)/2-1] + h[len(h)/2]) / 2
+	}
+	return h[(len(h)-1)/2]
+}
+
+func (h Histogram) String() string {
+	return fmt.Sprintf(
+		"Mean: %f Median: %f Min: %f Max: %f",
+		h.Mean(),
+		h.Median(),
+		h.Min(),
+		h.Max(),
+	)
 }
 
 func readSubjects(file string) ([]*Subject, error) {
@@ -138,14 +299,14 @@ func readSubjects(file string) ([]*Subject, error) {
 				switch t := dst.(type) {
 				case *string:
 					*t = val
-				case *bool:
+				case *Status:
 					switch val {
 					case "positiv":
 						*t = true
 					case "negativ":
 						*t = false
 					default:
-						return fmt.Errorf("Invalid bool: %s", val)
+						return fmt.Errorf("Invalid Status: %s", val)
 					}
 				case *Group:
 					found := false
@@ -185,14 +346,15 @@ func readSubjects(file string) ([]*Subject, error) {
 			return nil
 		}
 		initialMapping := map[string]interface{}{
-			"Probennummer": &s.ProbeNumber,
-			"Vorname":      &s.FirstName,
-			"Nachname":     &s.LastName,
+			"Probennummer":      &s.ProbeNumber,
+			"Labor- Berlin Nr.": &s.LabBerlinNumber,
+			"Vorname":           &s.FirstName,
+			"Nachname":          &s.LastName,
 		}
 		if err := apply(initialMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", err, row)
 		}
-		if s.ProbeNumber == "" {
+		if s.ProbeNumber == "" && s.LabBerlinNumber == "" {
 			// ignore empty row
 			continue
 		}
@@ -231,14 +393,24 @@ const (
 
 var Groups = []Group{GK, CIS, RRMS, SPMS, PPMS}
 
+type Status bool
+
+func (s Status) String() string {
+	if s {
+		return "positiv"
+	}
+	return "negativ"
+}
+
 type Subject struct {
-	ProbeNumber string
-	FirstName   string
-	LastName    string
-	Group       Group
-	Gender      Gender
-	IgG         bool
-	Age         float64
+	ProbeNumber     string
+	LabBerlinNumber string
+	FirstName       string
+	LastName        string
+	Group           Group
+	Gender          Gender
+	IgG             Status
+	Age             float64
 }
 
 func (s *Subject) String() string {
