@@ -80,6 +80,53 @@ func main() {
 		"IgG-MS-GK-Matched": func(w *csv.Writer) error {
 			return IgG_MS_GK(w, matched)
 		},
+		"IgG-MS-GK-Matched-Mc-Nemar": func(w *csv.Writer) error {
+			results := struct {
+				NoYes  int
+				YesNo  int
+				YesYes int
+				NoNo   int
+			}{}
+			i := 0
+			for i < len(matched) {
+				controlSubject, caseSubject := matched[i], matched[i+1]
+				if controlSubject.IgG && !caseSubject.IgG {
+					results.NoYes++
+				} else if !controlSubject.IgG && caseSubject.IgG {
+					results.YesNo++
+				} else if !controlSubject.IgG && !caseSubject.IgG {
+					results.YesYes++
+				} else if controlSubject.IgG && caseSubject.IgG {
+					results.NoNo++
+				}
+				i += 2
+			}
+			fmt.Printf("results: %#v\n", results)
+			if err := w.Write([]string{"Control Risk Factor", "Case Risk Factor", "Count"}); err != nil {
+				return err
+			}
+			rows := []struct {
+				ControlRisk bool
+				CaseRisk    bool
+				Count       int
+			}{
+				{false, true, results.NoYes},
+				{true, false, results.YesNo},
+				{true, true, results.YesYes},
+				{false, false, results.NoNo},
+			}
+			for _, row := range rows {
+				rowStr := []string{
+					fmt.Sprintf("%s", yesNo(row.ControlRisk)),
+					fmt.Sprintf("%s", yesNo(row.CaseRisk)),
+					fmt.Sprintf("%d", row.Count),
+				}
+				if err := w.Write(rowStr); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
 	}
 	for name, fn := range outputFiles {
 		outputs := []string{"csv", "prism"}
@@ -109,6 +156,13 @@ func main() {
 		}
 	}
 	fmt.Printf("Total: %s\n", time.Since(start))
+}
+
+func yesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
 }
 
 func writeHistogram(w *csv.Writer, h Histogram) error {
