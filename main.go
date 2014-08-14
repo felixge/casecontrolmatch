@@ -81,35 +81,16 @@ func main() {
 			return IgG_MS_GK(w, matched)
 		},
 		"IgG-Treatment": func(w *csv.Writer) error {
-			type group string
-			const (
-				Untreated         group = "Unbehandelt"
-				BaseMedication    group = "Basismedikation"
-				EscalationTherapy group = "Eskalationstherapie"
-			)
 			type result struct {
 				Positive int
 				Negative int
 			}
-			results := map[group]result{}
-			groups := []group{Untreated, BaseMedication, EscalationTherapy}
+			results := map[TherapyGroup]result{}
+			groups := []TherapyGroup{Untreated, BaseMedication, EscalationTherapy}
 			for _, s := range subjects {
-				if s.Group == GK {
+				g := s.TherapyGroup()
+				if g == TherapyNA {
 					continue
-				}
-				if s.BaseMedication == NA || s.EscalationTherapy == NA {
-					continue
-				}
-				if s.BaseMedication == Yes && s.EscalationTherapy == Yes {
-					continue
-				}
-				var g group
-				if s.BaseMedication == Yes {
-					g = BaseMedication
-				} else if s.EscalationTherapy == Yes {
-					g = EscalationTherapy
-				} else {
-					g = Untreated
 				}
 				r := results[g]
 				if s.IgG {
@@ -129,6 +110,24 @@ func main() {
 					string(g),
 					fmt.Sprintf("%d", r.Positive),
 					fmt.Sprintf("%d", r.Negative),
+				}
+				if err := w.Write(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		"EDSS": func(w *csv.Writer) error {
+			header := []string{"EDSS"}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			for _, s := range subjects {
+				if s.EDSS == nil {
+					continue
+				}
+				row := []string{
+					fmt.Sprintf("%f", *s.EDSS),
 				}
 				if err := w.Write(row); err != nil {
 					return err
@@ -351,12 +350,39 @@ func writeSubjects(w *csv.Writer, subjects []*Subject) error {
 		"Geschlecht",
 		"Gruppe",
 		"IgG",
-		"Alter (Entname)",
+		"Alter (PE)",
+		"Alter (EM)",
+		"Erkrankungsdauer",
+		"EDSS",
+		"Q (CSF/Serum) IgG",
+		"Nikotinabusus",
+		"Therapie",
+		"Anzahl Schübe",
 	}
 	if err := w.Write(header); err != nil {
 		return err
 	}
 	for _, s := range subjects {
+		var ageEM string
+		if s.AgeEM != nil {
+			ageEM = fmt.Sprintf("%f", *s.AgeEM)
+		}
+		var sickDuration string
+		if s.SickDuration != nil {
+			sickDuration = fmt.Sprintf("%f", *s.SickDuration)
+		}
+		var edss string
+		if s.EDSS != nil {
+			edss = fmt.Sprintf("%f", *s.EDSS)
+		}
+		var qIgG string
+		if s.QIgG != nil {
+			qIgG = fmt.Sprintf("%f", *s.QIgG)
+		}
+		var numRelapse string
+		if s.NumRelapse != nil {
+			numRelapse = fmt.Sprintf("%f", *s.NumRelapse)
+		}
 		row := []string{
 			s.LabBerlinNumber,
 			s.ProbeNumber,
@@ -366,6 +392,13 @@ func writeSubjects(w *csv.Writer, subjects []*Subject) error {
 			string(s.Group),
 			fmt.Sprintf("%s", s.IgG),
 			fmt.Sprintf("%f", s.Age),
+			ageEM,
+			sickDuration,
+			edss,
+			qIgG,
+			string(s.Nikotinabusus),
+			string(s.TherapyGroup()),
+			numRelapse,
 		}
 		if err := w.Write(row); err != nil {
 			return err
@@ -588,15 +621,19 @@ func readSubjects(file string) ([]*Subject, error) {
 			continue
 		}
 		remainingMapping := map[string]interface{}{
-			"Alter (PE)":          &s.Age,
-			"Gruppe":              &s.Group,
-			"Geschlecht":          &s.Gender,
-			"IgG":                 &s.IgG,
-			"IgG titer (IU/ml)":   &s.IgGTiter,
-			"Nikotinabusus":       &s.Nikotinabusus,
-			"Basismedikation":     &s.BaseMedication,
-			"Eskalationstherapie": &s.EscalationTherapy,
-			"EDSS":                &s.EDSS,
+			"Alter (PE)":                &s.Age,
+			"Gruppe":                    &s.Group,
+			"Geschlecht":                &s.Gender,
+			"IgG":                       &s.IgG,
+			"IgG titer (IU/ml)":         &s.IgGTiter,
+			"Nikotinabusus":             &s.Nikotinabusus,
+			"Basismedikation":           &s.BaseMedication,
+			"Eskalationstherapie":       &s.EscalationTherapy,
+			"EDSS":                      &s.EDSS,
+			"Alter (EM)":                &s.AgeEM,
+			"Erkrankungsdauer (Monate)": &s.SickDuration,
+			"Q (CSF/Serum) IgG":         &s.QIgG,
+			"Anzahl der Schübe":         &s.NumRelapse,
 		}
 		if err := apply(remainingMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", s, err)
@@ -644,6 +681,15 @@ const (
 	NA  YesNoNA = "n/a"
 )
 
+type TherapyGroup string
+
+const (
+	TherapyNA         TherapyGroup = "n/a"
+	Untreated         TherapyGroup = "Unbehandelt"
+	BaseMedication    TherapyGroup = "Basismedikation"
+	EscalationTherapy TherapyGroup = "Eskalationstherapie"
+)
+
 type Subject struct {
 	ProbeNumber       string
 	LabBerlinNumber   string
@@ -653,11 +699,34 @@ type Subject struct {
 	Gender            Gender
 	IgG               Status
 	IgGTiter          float64
+	QIgG              *float64
 	Age               float64
+	AgeEM             *float64
+	SickDuration      *float64
 	Nikotinabusus     YesNoNA
 	BaseMedication    YesNoNA
 	EscalationTherapy YesNoNA
 	EDSS              *float64
+	NumRelapse        *float64
+}
+
+func (s *Subject) TherapyGroup() TherapyGroup {
+	if s.Group == GK {
+		return TherapyNA
+	}
+	if s.BaseMedication == NA || s.EscalationTherapy == NA {
+		return TherapyNA
+	}
+	if s.BaseMedication == Yes && s.EscalationTherapy == Yes {
+		return TherapyNA
+	}
+	if s.BaseMedication == Yes {
+		return BaseMedication
+	} else if s.EscalationTherapy == Yes {
+		return EscalationTherapy
+	} else {
+		return Untreated
+	}
 }
 
 func (s *Subject) String() string {
