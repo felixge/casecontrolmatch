@@ -64,6 +64,51 @@ func main() {
 		}
 		return nil
 	}
+	IgG_Titer_Lessions := func(w *csv.Writer, subjects []*Subject, kind string) error {
+		header := []string{}
+		groups := []Lesion{Lt6, GtEq6}
+		for _, group := range groups {
+			header = append(header, string(group))
+		}
+		if err := w.Write(header); err != nil {
+			return err
+		}
+		results := map[Lesion][]float64{}
+		for _, s := range subjects {
+			var val Lesion
+			switch kind {
+			case "CMRT":
+				val = s.CMRT_T2
+			case "SMRT":
+				val = s.SMRT_T2
+			default:
+				return fmt.Errorf("bad kind: %s", kind)
+			}
+			if val == LesionNA {
+				continue
+			}
+			results[val] = append(results[val], s.IgGTiter)
+		}
+		i := 0
+		for {
+			found := false
+			row := make([]string, len(groups))
+			for g, group := range groups {
+				if i < len(results[group]) {
+					row[g] = fmt.Sprintf("%f", results[group][i])
+					found = true
+				}
+			}
+			if !found {
+				break
+			}
+			if err := w.Write(row); err != nil {
+				return err
+			}
+			i++
+		}
+		return nil
+	}
 	outputFiles := map[string]func(w *csv.Writer) error{
 		"Patienten": func(w *csv.Writer) error {
 			return writeSubjects(w, subjects)
@@ -163,6 +208,44 @@ func main() {
 				row := []string{
 					fmt.Sprintf("%f", s.Age),
 					fmt.Sprintf("%f", s.IgGTiter),
+				}
+				if err := w.Write(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		"IgG-Titer-CMRT-T2": func(w *csv.Writer) error {
+			return IgG_Titer_Lessions(w, subjects, "CMRT")
+		},
+		"IgG-Titer-SMRT-T2": func(w *csv.Writer) error {
+			return IgG_Titer_Lessions(w, subjects, "SMRT")
+		},
+		"Nikotinabusus-MS-GK-Unmatched": func(w *csv.Writer) error {
+			header := []string{"Nikotinabusus", "GK", "MS"}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			type result struct {
+				GK int
+				MS int
+			}
+			results := map[YesNoNA]result{}
+			for _, s := range subjects {
+				r := results[s.Nikotinabusus]
+				if s.Group == GK {
+					r.GK++
+				} else {
+					r.MS++
+				}
+				results[s.Nikotinabusus] = r
+			}
+			rowTitles := []YesNoNA{Yes, No, NA}
+			for _, title := range rowTitles {
+				row := []string{
+					string(title),
+					fmt.Sprintf("%d", results[title].GK),
+					fmt.Sprintf("%d", results[title].MS),
 				}
 				if err := w.Write(row); err != nil {
 					return err
@@ -586,6 +669,17 @@ func readSubjects(file string) ([]*Subject, error) {
 					default:
 						*t = NA
 					}
+				case *Lesion:
+					switch val {
+					case "<6":
+						*t = Lt6
+					case "6":
+						fallthrough
+					case ">6":
+						*t = GtEq6
+					default:
+						*t = LesionNA
+					}
 				case *float64:
 					val = strings.Replace(val, ",", ".", -1)
 					f, err := strconv.ParseFloat(val, 64)
@@ -621,19 +715,21 @@ func readSubjects(file string) ([]*Subject, error) {
 			continue
 		}
 		remainingMapping := map[string]interface{}{
-			"Alter (PE)":                &s.Age,
-			"Gruppe":                    &s.Group,
-			"Geschlecht":                &s.Gender,
-			"IgG":                       &s.IgG,
-			"IgG titer (IU/ml)":         &s.IgGTiter,
-			"Nikotinabusus":             &s.Nikotinabusus,
-			"Basismedikation":           &s.BaseMedication,
-			"Eskalationstherapie":       &s.EscalationTherapy,
-			"EDSS":                      &s.EDSS,
-			"Alter (EM)":                &s.AgeEM,
-			"Erkrankungsdauer (Monate)": &s.SickDuration,
-			"Q (CSF/Serum) IgG":         &s.QIgG,
-			"Anzahl der Schübe":         &s.NumRelapse,
+			"Alter (PE)":                        &s.Age,
+			"Gruppe":                            &s.Group,
+			"Geschlecht":                        &s.Gender,
+			"IgG":                               &s.IgG,
+			"IgG titer (IU/ml)":                 &s.IgGTiter,
+			"Nikotinabusus":                     &s.Nikotinabusus,
+			"Basismedikation":                   &s.BaseMedication,
+			"Eskalationstherapie":               &s.EscalationTherapy,
+			"EDSS":                              &s.EDSS,
+			"Alter (EM)":                        &s.AgeEM,
+			"Erkrankungsdauer (Monate)":         &s.SickDuration,
+			"Q (CSF/Serum) IgG":                 &s.QIgG,
+			"Anzahl der Schübe":                 &s.NumRelapse,
+			"cMRT: n-Läsionen T2-Statistik neu": &s.CMRT_T2,
+			"sMRT: n-Läsionen T2-Statistik neu": &s.SMRT_T2,
 		}
 		if err := apply(remainingMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", s, err)
@@ -690,6 +786,14 @@ const (
 	EscalationTherapy TherapyGroup = "Eskalationstherapie"
 )
 
+type Lesion string
+
+const (
+	Lt6      Lesion = "<6"
+	GtEq6    Lesion = ">=6"
+	LesionNA Lesion = "n/a"
+)
+
 type Subject struct {
 	ProbeNumber       string
 	LabBerlinNumber   string
@@ -708,6 +812,8 @@ type Subject struct {
 	EscalationTherapy YesNoNA
 	EDSS              *float64
 	NumRelapse        *float64
+	CMRT_T2           Lesion
+	SMRT_T2           Lesion
 }
 
 func (s *Subject) TherapyGroup() TherapyGroup {
