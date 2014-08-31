@@ -170,6 +170,30 @@ func main() {
 			}
 			return nil
 		},
+		"IgG-Titer-SMRT-GD": func(w *csv.Writer) error {
+			groups := []Group{
+				NASPositiv,
+				NASNegativ,
+				NASNA,
+			}
+			groupSubjects := make([]GroupSubject, len(subjects))
+			for i, s := range subjects {
+				groupSubjects[i] = SMRT_GDSubject{s}
+			}
+			return WriteGroupValues(w, groups, groupSubjects)
+		},
+		"IgG-Titer-CMRT-GD": func(w *csv.Writer) error {
+			groups := []Group{
+				NASPositiv,
+				NASNegativ,
+				NASNA,
+			}
+			groupSubjects := make([]GroupSubject, len(subjects))
+			for i, s := range subjects {
+				groupSubjects[i] = CMRT_GDSubject{s}
+			}
+			return WriteGroupValues(w, groups, groupSubjects)
+		},
 		"IgG-Titer-CMRT-T2": func(w *csv.Writer) error {
 			groups := []Group{
 				NewNARelInt(NewRelInt(Eq, 0), false),
@@ -611,6 +635,12 @@ func readSubjects(file string) ([]*Subject, error) {
 					default:
 						return fmt.Errorf("Invalid Status: %s", val)
 					}
+				case *NAStatus:
+					p, err := ParseNAStatus(val)
+					if err != nil {
+						return err
+					}
+					*t = p
 				case *Diagnosis:
 					found := false
 					for _, group := range Diagnoses {
@@ -704,6 +734,8 @@ func readSubjects(file string) ([]*Subject, error) {
 			"Anzahl der Schübe":                   &s.NumRelapse,
 			"cMRT: n-Läsionen T2-Statistik neu":   &s.CMRT_T2,
 			"sMRT: n-Läsionen T2-Statistik neu 3": &s.SMRT_T2,
+			"cMRT Gd": &s.CMRT_GD,
+			"sMRT Gd": &s.SMRT_GD,
 		}
 		if err := apply(remainingMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", s, err)
@@ -780,6 +812,8 @@ type Subject struct {
 	NumRelapse        *float64
 	CMRT_T2           NARelInt
 	SMRT_T2           NARelInt
+	CMRT_GD           NAStatus
+	SMRT_GD           NAStatus
 }
 
 func (s *Subject) TherapyGroup() TherapyGroup {
@@ -819,7 +853,7 @@ func (s CMRTSubject) String() string {
 }
 
 func (s CMRTSubject) Group() Group {
-	return Group(s.CMRT_T2)
+	return s.CMRT_T2
 }
 
 type SMRTSubject struct {
@@ -831,5 +865,29 @@ func (s SMRTSubject) String() string {
 }
 
 func (s SMRTSubject) Group() Group {
-	return Group(s.SMRT_T2)
+	return s.SMRT_T2
+}
+
+type SMRT_GDSubject struct {
+	*Subject
+}
+
+func (s SMRT_GDSubject) String() string {
+	return fmt.Sprintf("%f", s.IgGTiter)
+}
+
+func (s SMRT_GDSubject) Group() Group {
+	return s.SMRT_GD
+}
+
+type CMRT_GDSubject struct {
+	*Subject
+}
+
+func (s CMRT_GDSubject) String() string {
+	return fmt.Sprintf("%f", s.IgGTiter)
+}
+
+func (s CMRT_GDSubject) Group() Group {
+	return s.CMRT_GD
 }
