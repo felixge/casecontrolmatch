@@ -47,7 +47,7 @@ func main() {
 		negative := map[string]int{}
 		for _, s := range subjects {
 			group := "GK"
-			if s.Group != GK {
+			if s.Diagnosis != GK {
 				group = "MS"
 			}
 			if s.IgG {
@@ -61,68 +61,6 @@ func main() {
 		}
 		if err := w.Write([]string{"negativ", fmt.Sprintf("%d", negative["GK"]), fmt.Sprintf("%d", negative["MS"])}); err != nil {
 			return err
-		}
-		return nil
-	}
-	IgG_Titer_Lessions := func(w *csv.Writer, groups []NARelInt, subjects []*Subject, kind string) error {
-		header := []string{}
-		for _, group := range groups {
-			header = append(header, group.String())
-		}
-		if err := w.Write(header); err != nil {
-			return err
-		}
-		results := map[NARelInt][]float64{}
-		for _, s := range subjects {
-			var val NARelInt
-			switch kind {
-			case "CMRT":
-				val = s.CMRT_T2
-			case "SMRT":
-				val = s.SMRT_T2
-			default:
-				return fmt.Errorf("bad kind: %s", kind)
-			}
-			match := false
-			for _, group := range groups {
-				if val.Kind() == group.Kind() {
-					if val.Val() == group.Val() {
-						if val.NA() == group.NA() {
-							match = true
-						}
-					}
-				}
-				if match {
-					results[group] = append(results[group], s.IgGTiter)
-					break
-				}
-			}
-			if !match {
-				groupStrings := []string{}
-				for _, group := range groups {
-					groupStrings = append(groupStrings, group.String())
-				}
-				groupsString := strings.Join(groupStrings, ",")
-				return fmt.Errorf("%s did not match: %s", val, groupsString)
-			}
-		}
-		i := 0
-		for {
-			found := false
-			row := make([]string, len(groups))
-			for g, group := range groups {
-				if i < len(results[group]) {
-					row[g] = fmt.Sprintf("%f", results[group][i])
-					found = true
-				}
-			}
-			if !found {
-				break
-			}
-			if err := w.Write(row); err != nil {
-				return err
-			}
-			i++
 		}
 		return nil
 	}
@@ -233,22 +171,30 @@ func main() {
 			return nil
 		},
 		"IgG-Titer-CMRT-T2": func(w *csv.Writer) error {
-			groups := []NARelInt{
+			groups := []Group{
 				NewNARelInt(NewRelInt(Eq, 0), false),
 				NewNARelInt(NewRelInt(Lt, 6), false),
 				NewNARelInt(NewRelInt(GtEq, 6), false),
 				NewNARelInt(RelInt{}, true),
 			}
-			return IgG_Titer_Lessions(w, groups, subjects, "CMRT")
+			groupSubjects := make([]GroupSubject, len(subjects))
+			for i, s := range subjects {
+				groupSubjects[i] = CMRTSubject{s}
+			}
+			return WriteGroupValues(w, groups, groupSubjects)
 		},
 		"IgG-Titer-SMRT-T2": func(w *csv.Writer) error {
-			groups := []NARelInt{
+			groups := []Group{
 				NewNARelInt(NewRelInt(Eq, 0), false),
 				NewNARelInt(NewRelInt(Lt, 3), false),
 				NewNARelInt(NewRelInt(GtEq, 3), false),
 				NewNARelInt(RelInt{}, true),
 			}
-			return IgG_Titer_Lessions(w, groups, subjects, "SMRT")
+			groupSubjects := make([]GroupSubject, len(subjects))
+			for i, s := range subjects {
+				groupSubjects[i] = SMRTSubject{s}
+			}
+			return WriteGroupValues(w, groups, groupSubjects)
 		},
 		"Nikotinabusus-MS-GK-Unmatched": func(w *csv.Writer) error {
 			header := []string{"Nikotinabusus", "GK", "MS"}
@@ -262,7 +208,7 @@ func main() {
 			results := map[YesNoNA]result{}
 			for _, s := range subjects {
 				r := results[s.Nikotinabusus]
-				if s.Group == GK {
+				if s.Diagnosis == GK {
 					r.GK++
 				} else {
 					r.MS++
@@ -300,7 +246,7 @@ func main() {
 			}
 			i := 0
 			for {
-				row := make([]string, len(Groups))
+				row := make([]string, len(Diagnoses))
 				found := false
 				for g, group := range groups {
 					if i < len(results[group]) {
@@ -320,21 +266,21 @@ func main() {
 		},
 		"IgG-Titer-Unmatched": func(w *csv.Writer) error {
 			header := []string{}
-			for _, group := range Groups {
+			for _, group := range Diagnoses {
 				header = append(header, string(group))
 			}
 			if err := w.Write(header); err != nil {
 				return err
 			}
-			results := map[Group][]float64{}
+			results := map[Diagnosis][]float64{}
 			for _, s := range subjects {
-				results[s.Group] = append(results[s.Group], s.IgGTiter)
+				results[s.Diagnosis] = append(results[s.Diagnosis], s.IgGTiter)
 			}
 			i := 0
 			for {
-				row := make([]string, len(Groups))
+				row := make([]string, len(Diagnoses))
 				found := false
-				for g, group := range Groups {
+				for g, group := range Diagnoses {
 					if i < len(results[group]) {
 						found = true
 						row[g] = fmt.Sprintf("%f", results[group][i])
@@ -501,7 +447,7 @@ func writeSubjects(w *csv.Writer, subjects []*Subject) error {
 			s.FirstName,
 			s.LastName,
 			string(s.Gender),
-			string(s.Group),
+			string(s.Diagnosis),
 			fmt.Sprintf("%s", s.IgG),
 			fmt.Sprintf("%f", s.Age),
 			ageEM,
@@ -527,7 +473,7 @@ func match(subjects []*Subject) (results []*Subject, ageDiffs Histogram) {
 	)
 	for _, subject := range subjects {
 		ops++
-		if subject.Group == GK {
+		if subject.Diagnosis == GK {
 			controls = append(controls, subject)
 		} else {
 			cases = append(cases, subject)
@@ -665,11 +611,11 @@ func readSubjects(file string) ([]*Subject, error) {
 					default:
 						return fmt.Errorf("Invalid Status: %s", val)
 					}
-				case *Group:
+				case *Diagnosis:
 					found := false
-					for _, group := range Groups {
+					for _, group := range Diagnoses {
 						if string(group) == val {
-							*t = Group(val)
+							*t = Diagnosis(val)
 							found = true
 							break
 						}
@@ -744,7 +690,7 @@ func readSubjects(file string) ([]*Subject, error) {
 		}
 		remainingMapping := map[string]interface{}{
 			"Alter (PE)":                          &s.Age,
-			"Gruppe":                              &s.Group,
+			"Gruppe":                              &s.Diagnosis,
 			"Geschlecht":                          &s.Gender,
 			"IgG":                                 &s.IgG,
 			"IgG titer (IU/ml)":                   &s.IgGTiter,
@@ -776,17 +722,17 @@ const (
 
 var Genders = []Gender{Male, Female}
 
-type Group string
+type Diagnosis string
 
 const (
-	GK   Group = "GK"
-	CIS  Group = "CIS"
-	RRMS Group = "RRMS"
-	SPMS Group = "SPMS"
-	PPMS Group = "PPMS"
+	GK   Diagnosis = "GK"
+	CIS  Diagnosis = "CIS"
+	RRMS Diagnosis = "RRMS"
+	SPMS Diagnosis = "SPMS"
+	PPMS Diagnosis = "PPMS"
 )
 
-var Groups = []Group{GK, CIS, RRMS, SPMS, PPMS}
+var Diagnoses = []Diagnosis{GK, CIS, RRMS, SPMS, PPMS}
 
 type Status bool
 
@@ -819,7 +765,7 @@ type Subject struct {
 	LabBerlinNumber   string
 	FirstName         string
 	LastName          string
-	Group             Group
+	Diagnosis         Diagnosis
 	Gender            Gender
 	IgG               Status
 	IgGTiter          float64
@@ -837,7 +783,7 @@ type Subject struct {
 }
 
 func (s *Subject) TherapyGroup() TherapyGroup {
-	if s.Group == GK {
+	if s.Diagnosis == GK {
 		return TherapyNA
 	}
 	if s.BaseMedication == NA || s.EscalationTherapy == NA {
@@ -862,4 +808,28 @@ func (s *Subject) String() string {
 func fatalf(msg string, args ...interface{}) {
 	fmt.Fprintf(os.Stderr, msg+"\n", args...)
 	os.Exit(1)
+}
+
+type CMRTSubject struct {
+	*Subject
+}
+
+func (s CMRTSubject) String() string {
+	return fmt.Sprintf("%f", s.IgGTiter)
+}
+
+func (s CMRTSubject) Group() Group {
+	return Group(s.CMRT_T2)
+}
+
+type SMRTSubject struct {
+	*Subject
+}
+
+func (s SMRTSubject) String() string {
+	return fmt.Sprintf("%f", s.IgGTiter)
+}
+
+func (s SMRTSubject) Group() Group {
+	return Group(s.SMRT_T2)
 }
