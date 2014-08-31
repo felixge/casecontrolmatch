@@ -62,3 +62,26 @@ func (s IgG_MS_GKSubject) Top() string {
 func (s IgG_MS_GKSubject) Left() string {
 	return s.IgG.String()
 }
+
+func IgM_MS_GKSubjects(subject []*Subject) []ContingencySubject {
+	r := []ContingencySubject{}
+	for _, s := range subject {
+		r = append(r, IgM_MS_GKSubject{s})
+	}
+	return r
+}
+
+type IgM_MS_GKSubject struct {
+	*Subject
+}
+
+func (s IgM_MS_GKSubject) Top() string {
+	if s.Diagnosis != GK {
+		return "MS"
+	}
+	return "GK"
+}
+
+func (s IgM_MS_GKSubject) Left() string {
+	return s.IgM.String()
+}

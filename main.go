@@ -50,14 +50,24 @@ func main() {
 			return writeHistogram(w, matchedAgeDiffs)
 		},
 		"IgG-MS-GK-Unmatched": func(w *csv.Writer) error {
-			top := []string{"GK", "MS"}
+			top := []string{"MS", "GK"}
 			left := []string{"positiv", "negativ"}
 			return WriteContingency(w, top, left, IgG_MS_GKSubjects(subjects))
 		},
 		"IgG-MS-GK-Matched": func(w *csv.Writer) error {
-			top := []string{"GK", "MS"}
+			top := []string{"MS", "GK"}
 			left := []string{"positiv", "negativ"}
 			return WriteContingency(w, top, left, IgG_MS_GKSubjects(matched))
+		},
+		"IgM-MS-GK-Unmatched": func(w *csv.Writer) error {
+			top := []string{"MS", "GK"}
+			left := []string{"positiv", "negativ"}
+			return WriteContingency(w, top, left, IgM_MS_GKSubjects(subjects))
+		},
+		"IgM-MS-GK-Matched": func(w *csv.Writer) error {
+			top := []string{"MS", "GK"}
+			left := []string{"positiv", "negativ"}
+			return WriteContingency(w, top, left, IgM_MS_GKSubjects(matched))
 		},
 		"IgG-Treatment": func(w *csv.Writer) error {
 			type result struct {
@@ -739,11 +749,11 @@ func readSubjects(file string) ([]*Subject, error) {
 			continue
 		}
 		remainingMapping := map[string]interface{}{
-			"Alter (PE)": &s.Age,
-			"Gruppe":     &s.Diagnosis,
-			"Geschlecht": &s.Gender,
-			"IgG":        &s.IgG,
-			//"IgM":                                 &s.IgM,
+			"Alter (PE)":                          &s.Age,
+			"Gruppe":                              &s.Diagnosis,
+			"Geschlecht":                          &s.Gender,
+			"IgG":                                 &s.IgG,
+			"IgM":                                 &s.IgM,
 			"IgG titer (IU/ml)":                   &s.IgGTiter,
 			"Nikotinabusus":                       &s.Nikotinabusus,
 			"Basismedikation":                     &s.BaseMedication,
