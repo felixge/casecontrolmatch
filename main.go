@@ -39,31 +39,6 @@ func main() {
 	matchStart := time.Now()
 	matched, matchedAgeDiffs := match(subjects)
 	fmt.Printf("match: %s\n", time.Since(matchStart))
-	IgG_MS_GK := func(w *csv.Writer, subjects []*Subject) error {
-		if err := w.Write([]string{"Title", "GK", "MS"}); err != nil {
-			return err
-		}
-		positive := map[string]int{}
-		negative := map[string]int{}
-		for _, s := range subjects {
-			group := "GK"
-			if s.Diagnosis != GK {
-				group = "MS"
-			}
-			if s.IgG {
-				positive[group]++
-			} else {
-				negative[group]++
-			}
-		}
-		if err := w.Write([]string{"positiv", fmt.Sprintf("%d", positive["GK"]), fmt.Sprintf("%d", positive["MS"])}); err != nil {
-			return err
-		}
-		if err := w.Write([]string{"negativ", fmt.Sprintf("%d", negative["GK"]), fmt.Sprintf("%d", negative["MS"])}); err != nil {
-			return err
-		}
-		return nil
-	}
 	outputFiles := map[string]func(w *csv.Writer) error{
 		"Patienten": func(w *csv.Writer) error {
 			return writeSubjects(w, subjects)
@@ -75,10 +50,14 @@ func main() {
 			return writeHistogram(w, matchedAgeDiffs)
 		},
 		"IgG-MS-GK-Unmatched": func(w *csv.Writer) error {
-			return IgG_MS_GK(w, subjects)
+			top := []string{"GK", "MS"}
+			left := []string{"positiv", "negativ"}
+			return WriteContingency(w, top, left, IgG_MS_GKSubjects(subjects))
 		},
 		"IgG-MS-GK-Matched": func(w *csv.Writer) error {
-			return IgG_MS_GK(w, matched)
+			top := []string{"GK", "MS"}
+			left := []string{"positiv", "negativ"}
+			return WriteContingency(w, top, left, IgG_MS_GKSubjects(matched))
 		},
 		"IgG-Treatment": func(w *csv.Writer) error {
 			type result struct {
@@ -110,6 +89,47 @@ func main() {
 					string(g),
 					fmt.Sprintf("%d", r.Positive),
 					fmt.Sprintf("%d", r.Negative),
+				}
+				if err := w.Write(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		"IgG-Titer-IgG-Gesamt": func(w *csv.Writer) error {
+			header := []string{"IgG Gesamt", "IgG Titer"}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			for _, s := range subjects {
+				if s.IgGTotal == nil {
+					continue
+				}
+				row := []string{
+					fmt.Sprintf("%f", *s.IgGTotal),
+					fmt.Sprintf("%f", s.IgGTiter),
+				}
+				if err := w.Write(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		"IgG-Titer-Erkrankungsdauer": func(w *csv.Writer) error {
+			header := []string{"Erkrankungsdauer", "IgG Titer"}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			for _, s := range subjects {
+				if s.SickDuration == nil {
+					continue
+				}
+				if *s.SickDuration < 0 {
+					continue
+				}
+				row := []string{
+					fmt.Sprintf("%f", *s.SickDuration),
+					fmt.Sprintf("%f", s.IgGTiter),
 				}
 				if err := w.Write(row); err != nil {
 					return err
@@ -719,10 +739,11 @@ func readSubjects(file string) ([]*Subject, error) {
 			continue
 		}
 		remainingMapping := map[string]interface{}{
-			"Alter (PE)":                          &s.Age,
-			"Gruppe":                              &s.Diagnosis,
-			"Geschlecht":                          &s.Gender,
-			"IgG":                                 &s.IgG,
+			"Alter (PE)": &s.Age,
+			"Gruppe":     &s.Diagnosis,
+			"Geschlecht": &s.Gender,
+			"IgG":        &s.IgG,
+			//"IgM":                                 &s.IgM,
 			"IgG titer (IU/ml)":                   &s.IgGTiter,
 			"Nikotinabusus":                       &s.Nikotinabusus,
 			"Basismedikation":                     &s.BaseMedication,
@@ -734,8 +755,9 @@ func readSubjects(file string) ([]*Subject, error) {
 			"Anzahl der Schübe":                   &s.NumRelapse,
 			"cMRT: n-Läsionen T2-Statistik neu":   &s.CMRT_T2,
 			"sMRT: n-Läsionen T2-Statistik neu 3": &s.SMRT_T2,
-			"cMRT Gd": &s.CMRT_GD,
-			"sMRT Gd": &s.SMRT_GD,
+			"cMRT Gd":                    &s.CMRT_GD,
+			"sMRT Gd":                    &s.SMRT_GD,
+			"IgG mg/dl Serum (700-1600)": &s.IgGTotal,
 		}
 		if err := apply(remainingMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", s, err)
@@ -800,7 +822,9 @@ type Subject struct {
 	Diagnosis         Diagnosis
 	Gender            Gender
 	IgG               Status
+	IgM               NAStatus
 	IgGTiter          float64
+	IgGTotal          *float64
 	QIgG              *float64
 	Age               float64
 	AgeEM             *float64
