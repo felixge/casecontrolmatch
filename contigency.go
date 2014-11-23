@@ -85,3 +85,26 @@ func (s IgM_MS_GKSubject) Top() string {
 func (s IgM_MS_GKSubject) Left() string {
 	return s.IgM.String()
 }
+
+func ANA_Nikotinabusus_MS_Subjects(subject []*Subject) []ContingencySubject {
+	r := []ContingencySubject{}
+	for _, s := range subject {
+		if s.Diagnosis == GK {
+			continue
+		}
+		r = append(r, ANA_Nikotinabusus_Subject{s})
+	}
+	return r
+}
+
+type ANA_Nikotinabusus_Subject struct {
+	*Subject
+}
+
+func (s ANA_Nikotinabusus_Subject) Top() string {
+	return string(s.Nikotinabusus)
+}
+
+func (s ANA_Nikotinabusus_Subject) Left() string {
+	return s.ANA.String()
+}

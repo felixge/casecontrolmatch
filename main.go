@@ -69,6 +69,11 @@ func main() {
 			left := []string{"positiv", "negativ"}
 			return WriteContingency(w, top, left, IgM_MS_GKSubjects(matched))
 		},
+		"ANA-Nikotinabusus-MS": func(w *csv.Writer) error {
+			top := []string{"ja", "nein"}
+			left := []string{"positiv", "negativ"}
+			return WriteContingency(w, top, left, ANA_Nikotinabusus_MS_Subjects(subjects))
+		},
 		"IgG-Treatment": func(w *csv.Writer) error {
 			type result struct {
 				Positive int
@@ -470,6 +475,14 @@ func writeSubjects(w *csv.Writer, subjects []*Subject) error {
 		"Nikotinabusus",
 		"Therapie",
 		"Anzahl Schübe",
+		"cMRT T2",
+		"sMRT T2",
+		"cMRT Gd",
+		"sMRT Gd",
+		"ANA",
+		"IgG Gesamt",
+		"IgM",
+		"IgG Titer",
 	}
 	if err := w.Write(header); err != nil {
 		return err
@@ -495,6 +508,10 @@ func writeSubjects(w *csv.Writer, subjects []*Subject) error {
 		if s.NumRelapse != nil {
 			numRelapse = fmt.Sprintf("%f", *s.NumRelapse)
 		}
+		var IgGTotal string
+		if s.IgGTotal != nil {
+			IgGTotal = fmt.Sprintf("%f", *s.IgGTotal)
+		}
 		row := []string{
 			s.LabBerlinNumber,
 			s.ProbeNumber,
@@ -511,6 +528,14 @@ func writeSubjects(w *csv.Writer, subjects []*Subject) error {
 			string(s.Nikotinabusus),
 			string(s.TherapyGroup()),
 			numRelapse,
+			s.CMRT_T2.String(),
+			s.SMRT_T2.String(),
+			s.CMRT_GD.String(),
+			s.SMRT_GD.String(),
+			s.ANA.String(),
+			IgGTotal,
+			s.IgM.String(),
+			fmt.Sprintf("%f", s.IgGTiter),
 		}
 		if err := w.Write(row); err != nil {
 			return err
@@ -768,6 +793,7 @@ func readSubjects(file string) ([]*Subject, error) {
 			"cMRT Gd":                    &s.CMRT_GD,
 			"sMRT Gd":                    &s.SMRT_GD,
 			"IgG mg/dl Serum (700-1600)": &s.IgGTotal,
+			"ANA <1/80":                  &s.ANA,
 		}
 		if err := apply(remainingMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", s, err)
@@ -848,6 +874,7 @@ type Subject struct {
 	SMRT_T2           NARelInt
 	CMRT_GD           NAStatus
 	SMRT_GD           NAStatus
+	ANA               NAStatus
 }
 
 func (s *Subject) TherapyGroup() TherapyGroup {
