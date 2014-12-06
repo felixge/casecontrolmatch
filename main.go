@@ -229,6 +229,51 @@ func main() {
 			}
 			return WriteGroupValues(w, groups, groupSubjects)
 		},
+		"CMRT-T2-Counts": func(w *csv.Writer) error {
+			header := []string{""}
+			for _, dia := range Diagnoses {
+				header = append(header, string(dia))
+			}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			vals := []string{"0", "<6", ">=6", "n/a"}
+			for _, val := range vals {
+				results := []string{val}
+				for _, dia := range Diagnoses {
+					count := 0
+					for _, s := range matched {
+						if s.Diagnosis != dia {
+							continue
+						}
+						v := s.CMRT_T2.String()
+						if v != val {
+							continue
+						}
+						count++
+					}
+					results = append(results, fmt.Sprintf("%d", count))
+				}
+				if err := w.Write(results); err != nil {
+					return err
+				}
+			}
+			return nil
+			//countS := []string{}
+			//sum := 0
+			//for _, count := range counts {
+			//sum += count
+			//countS = append(countS, fmt.Sprintf("%d", count))
+			//}
+			//percents := []string{}
+			//for _, count := range counts {
+			//percents = append(percents, fmt.Sprintf("%.2f", float64(count)/float64(sum)*100))
+			//}
+			//if err := w.Write(countS); err != nil {
+			//return err
+			//}
+			//return w.Write(percents)
+		},
 		"IgG-Titer-CMRT-T2": func(w *csv.Writer) error {
 			groups := []Group{
 				NewNARelInt(NewRelInt(Eq, 0), false),
