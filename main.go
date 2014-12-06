@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/bradfitz/slice"
 )
 
 func main() {
@@ -40,6 +42,62 @@ func main() {
 	matched, matchedAgeDiffs := match(subjects)
 	fmt.Printf("match: %s\n", time.Since(matchStart))
 	outputFiles := map[string]func(w *csv.Writer) error{
+		"Patienten-MS-Toxo-Matched": func(w *csv.Writer) error {
+			matches := subjects.Match(func(a, b *Subject) float64 {
+				if a.Diagnosis == GK || b.Diagnosis == GK {
+					return 0
+				}
+				if a.Gender != b.Gender {
+					return 0
+				}
+				if a.IgG == b.IgG {
+					return 0
+				}
+				if a.SickDuration == nil || b.SickDuration == nil {
+					return 0
+				}
+				if *a.SickDuration < 0 || *b.SickDuration < 0 {
+					return 0
+				}
+				ageDiff := math.Abs(a.Age - b.Age)
+				if ageDiff > 3 {
+					return 0
+				}
+				sdDiff := math.Abs(*a.SickDuration - *b.SickDuration)
+				if sdDiff > 1 {
+					return 0
+				}
+				return 1 / sdDiff
+			})
+			header := []string{"Row", "Name", "Geschlecht", "Alter", "Erkrankungsdauer", "IgG", "Diagnose", "Geburtsdatum", "EDSS", "CMRT_T2", "CMRT_GD", "SMRT_T2", "SMRT_GD", "Match Score"}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			for i, match := range matches {
+				for j, s := range append(Subjects{}, match.A, match.B) {
+					row := []string{
+						fmt.Sprintf("%d", i*2+j+1),
+						fmt.Sprintf("%s %s", s.FirstName, s.LastName),
+						fmt.Sprintf("%s", s.Gender),
+						fmt.Sprintf("%f", s.Age),
+						fmt.Sprintf("%f", *s.SickDuration),
+						fmt.Sprintf("%s", s.IgG),
+						fmt.Sprintf("%s", s.Diagnosis),
+						fmt.Sprintf("%s", s.Birthday),
+						fmt.Sprintf("%s", float64PtrStr(s.EDSS)),
+						fmt.Sprintf("%s", s.CMRT_T2),
+						fmt.Sprintf("%s", s.CMRT_GD),
+						fmt.Sprintf("%s", s.SMRT_T2),
+						fmt.Sprintf("%s", s.SMRT_GD),
+						fmt.Sprintf("%.2f", match.Score),
+					}
+					if err := w.Write(row); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		},
 		"Patienten": func(w *csv.Writer) error {
 			return writeSubjects(w, subjects)
 		},
@@ -673,7 +731,7 @@ func (h Histogram) String() string {
 	)
 }
 
-func readSubjects(file string) ([]*Subject, error) {
+func readSubjects(file string) (Subjects, error) {
 	iconv := exec.Command("iconv", "-f", "utf-16", "-t", "utf-8", file)
 	stdout, err := iconv.StdoutPipe()
 	if err != nil {
@@ -692,7 +750,7 @@ func readSubjects(file string) ([]*Subject, error) {
 	if err != nil {
 		return nil, err
 	}
-	subjects := []*Subject{}
+	subjects := Subjects{}
 	for {
 		row, err := r.Read()
 		if err == io.EOF {
@@ -810,6 +868,7 @@ func readSubjects(file string) ([]*Subject, error) {
 			"Labor- Berlin Nr.": &s.LabBerlinNumber,
 			"Vorname":           &s.FirstName,
 			"Nachname":          &s.LastName,
+			"Geburtsdatum":      &s.Birthday,
 		}
 		if err := apply(initialMapping); err != nil {
 			return nil, fmt.Errorf("%s: %s", err, row)
@@ -895,6 +954,14 @@ const (
 	EscalationTherapy TherapyGroup = "Eskalationstherapie"
 )
 
+type Match struct {
+	A     *Subject
+	B     *Subject
+	Score float64
+	i     int
+	j     int
+}
+
 type Subject struct {
 	ProbeNumber       string
 	LabBerlinNumber   string
@@ -920,6 +987,47 @@ type Subject struct {
 	CMRT_GD           NAStatus
 	SMRT_GD           NAStatus
 	ANA               NAStatus
+	Birthday          string
+}
+
+type Subjects []*Subject
+
+func (s Subjects) Match(scoreFn func(a, b *Subject) float64) []Match {
+	removed := map[int]bool{}
+	matches := []Match{}
+	for i, a := range s {
+		if removed[i] {
+			continue
+		}
+		if len(s) < 2 {
+			break
+		}
+		var best Match
+		for j := i + 1; j < len(s); j++ {
+			if removed[j] {
+				continue
+			}
+			b := s[j]
+			score := scoreFn(a, b)
+			if score > best.Score {
+				best = Match{A: a, B: b, Score: score, i: i, j: j}
+			}
+		}
+		if best.Score > 0 {
+			removed[best.j] = true
+			if best.A == best.B || best.j == best.i {
+				panic("bug: broken invariant")
+			}
+			matches = append(matches, best)
+		}
+	}
+	slice.Sort(matches, func(i, j int) bool {
+		if matches[i].A == matches[j].A || matches[i].B == matches[j].B || matches[i].A == matches[j].B {
+			panic(fmt.Errorf("bug: broken invariant: %d: %#v | %d: %#v", i, matches[i], j, matches[j]))
+		}
+		return matches[i].Score > matches[j].Score
+	})
+	return matches
 }
 
 func (s *Subject) TherapyGroup() TherapyGroup {
@@ -939,6 +1047,13 @@ func (s *Subject) TherapyGroup() TherapyGroup {
 	} else {
 		return Untreated
 	}
+}
+
+func float64PtrStr(v *float64) string {
+	if v == nil {
+		return "n/a"
+	}
+	return fmt.Sprintf("%f", *v)
 }
 
 func (s *Subject) String() string {
