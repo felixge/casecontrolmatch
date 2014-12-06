@@ -41,39 +41,74 @@ func main() {
 	matchStart := time.Now()
 	matched, matchedAgeDiffs := match(subjects)
 	fmt.Printf("match: %s\n", time.Since(matchStart))
+	msMatched := subjects.Match(func(a, b *Subject) float64 {
+		if a.Diagnosis == GK || b.Diagnosis == GK {
+			return 0
+		}
+		if a.Gender != b.Gender {
+			return 0
+		}
+		if a.IgG == b.IgG {
+			return 0
+		}
+		if a.SickDuration == nil || b.SickDuration == nil {
+			return 0
+		}
+		if *a.SickDuration < 0 || *b.SickDuration < 0 {
+			return 0
+		}
+		ageDiff := math.Abs(a.Age - b.Age)
+		if ageDiff > 3 {
+			return 0
+		}
+		sdDiff := math.Abs(*a.SickDuration - *b.SickDuration)
+		if sdDiff > 1 {
+			return 0
+		}
+		return 1 / sdDiff
+	})
+
 	outputFiles := map[string]func(w *csv.Writer) error{
+		"Patienten-MS-Toxo-Matched-EDSS": func(w *csv.Writer) error {
+			header := []string{"Toxo-IgG Positiv", "Toxo-IgG Negativ"}
+			if err := w.Write(header); err != nil {
+				return err
+			}
+			results := map[Status][]float64{}
+			for _, m := range msMatched {
+				if m.A.EDSS == nil || m.B.EDSS == nil {
+					continue
+				}
+				for _, s := range append(Subjects{}, m.A, m.B) {
+					results[s.IgG] = append(results[s.IgG], *s.EDSS)
+				}
+			}
+			groups := []Status{true, false}
+			for i := 0; ; i++ {
+				row := make([]string, len(groups))
+				found := false
+				for j, group := range groups {
+					vals := results[group]
+					if i < len(vals) {
+						found = true
+						row[j] = fmt.Sprintf("%f", vals[i])
+					}
+				}
+				if !found {
+					break
+				}
+				if err := w.Write(row); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
 		"Patienten-MS-Toxo-Matched": func(w *csv.Writer) error {
-			matches := subjects.Match(func(a, b *Subject) float64 {
-				if a.Diagnosis == GK || b.Diagnosis == GK {
-					return 0
-				}
-				if a.Gender != b.Gender {
-					return 0
-				}
-				if a.IgG == b.IgG {
-					return 0
-				}
-				if a.SickDuration == nil || b.SickDuration == nil {
-					return 0
-				}
-				if *a.SickDuration < 0 || *b.SickDuration < 0 {
-					return 0
-				}
-				ageDiff := math.Abs(a.Age - b.Age)
-				if ageDiff > 3 {
-					return 0
-				}
-				sdDiff := math.Abs(*a.SickDuration - *b.SickDuration)
-				if sdDiff > 1 {
-					return 0
-				}
-				return 1 / sdDiff
-			})
 			header := []string{"Row", "Name", "Geschlecht", "Alter", "Erkrankungsdauer", "IgG", "Diagnose", "Geburtsdatum", "EDSS", "CMRT_T2", "CMRT_GD", "SMRT_T2", "SMRT_GD", "Match Score"}
 			if err := w.Write(header); err != nil {
 				return err
 			}
-			for i, match := range matches {
+			for i, match := range msMatched {
 				for j, s := range append(Subjects{}, match.A, match.B) {
 					row := []string{
 						fmt.Sprintf("%d", i*2+j+1),
